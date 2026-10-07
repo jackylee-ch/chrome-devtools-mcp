@@ -1,16 +1,17 @@
 {
   "name": "cdp-mcp-bg",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Background headless Chrome + cloned-profile orchestrator (MCP proxy) around chrome-devtools-mcp. Zero changes to chrome-devtools-mcp.",
+  "description": "Background headless MCP proxy around chrome-devtools-mcp, running on the agent's own dedicated Chrome profile (log in once, headless reuse). Never reads your real profile; no Full Disk Access; use-not-read + idle auto-close + bounded disk.",
   "bin": {
     "cdp-mcp-bg": "./src/index.mjs"
   },
   "scripts": {
     "test": "node --test --test-timeout=20000 test/unit.test.mjs test/proxy.test.mjs test/integration.test.mjs",
-    "sync": "node scripts/sync.mjs",
-    "spike:clone": "node test/spike-real-clone.mjs"
+    "login": "node src/index.mjs login",
+    "clear": "node src/index.mjs clear",
+    "spike:token": "node test/spike-token.mjs"
   },
   "engines": {
     "node": ">=20"

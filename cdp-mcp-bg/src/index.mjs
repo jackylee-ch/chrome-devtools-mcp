@@ -1,91 +1,101 @@
 #!/usr/bin/env node
 /**
- * cdp-mcp-bg — MCP stdio proxy that runs chrome-devtools-mcp headless on an ephemeral
- * CoW clone of the real Chrome profile, reuses login (incl. session cookies via
- * --restore-last-session), tears the browser + clone down when idle, and re-clones on
- * the next request — transparent to the agent. ZERO changes to chrome-devtools-mcp.
+ * cdp-mcp-bg — MCP stdio proxy that runs chrome-devtools-mcp HEADLESS on the agent's own
+ * DEDICATED profile (not your real Chrome, not a clone of it). You log into that profile
+ * ONCE (`cdp-mcp-bg login`, headful); the agent reuses it headless. Bottom lines:
+ *   - never read personal info: --no-javascript-evaluation + --no-category-network (use-not-read)
+ *   - memory/cpu: headless + idle auto-close of the browser
+ *   - disk: one profile (not per-task clones) + bounded Chrome cache
+ * ZERO changes to chrome-devtools-mcp. No Full Disk Access, no copying your real profile.
  *
- * Prereqs: macOS + APFS. ZERO Full Disk Access: the clone source is a user-synced
- * profile snapshot (CDP_PROFILE_SNAPSHOT); when it is missing/stale the proxy returns a
- * NeedsSync prompt and the user re-logs-in + re-copies. Design doc:
- * committers/chrome-devtools-mcp/design-headless-profile-clone.md.
- *
- * Forwards JSON-RPC request/response (initialize, tools/list, tools/call, ...) AND
- * server→client notifications (logging/progress). Agent-side notifications (no id) are
- * dropped intentionally (chrome-devtools-mcp needs none post-initialize).
+ * Usage:
+ *   cdp-mcp-bg            run the MCP proxy on stdio (what the agent connects to)
+ *   cdp-mcp-bg login [url]  open a VISIBLE Chrome on the dedicated profile to log in once
+ *   cdp-mcp-bg clear       delete the dedicated profile (clear all agent-side identity)
  */
 import process from 'node:process';
 import readline from 'node:readline';
-import {cloneProfile, purgeClones, profileReady, NeedsSyncError, defaultStagingDir} from './profile-syncer.mjs';
+import fs from 'node:fs';
+import {spawn} from 'node:child_process';
+import {defaultProfileDir, profileExists, clearProfile} from './profile.mjs';
 import {buildMcpArgs, assertSafeArgs} from './launch-args.mjs';
 import {ChildSupervisor, IdleTimer} from './supervisor.mjs';
 
-const IDLE_MS = Number(process.env.CDP_MCP_IDLE_MS || 5 * 60 * 1000); // §4.2 default 5min
+const IDLE_MS = Number(process.env.CDP_MCP_IDLE_MS || 5 * 60 * 1000);
 const MCP_CMD = process.env.CDP_MCP_CMD || 'node';
 const MCP_BIN = process.env.CDP_MCP_BIN || `${process.env.HOME}/Code/stczwd/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js`;
-const STAGING_DIR = process.env.CDP_PROFILE_SNAPSHOT || defaultStagingDir(); // user-synced snapshot (zero FDA)
-const CLONE_BASE = process.env.CDP_CLONE_BASE || undefined;
+const PROFILE_DIR = process.env.CDP_PROFILE_DIR || defaultProfileDir();
+const CHROME = process.env.CDP_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const RAW_CHILD_ARGS = process.env.CDP_RAW_CHILD_ARGS === '1'; // fake downstream for tests
 
 const log = (...a) => process.stderr.write('[cdp-mcp-bg] ' + a.join(' ') + '\n'); // stderr only
 const writeUp = obj => process.stdout.write(JSON.stringify(obj) + '\n');
 
-let currentClone = null;
-
-/** Clone from the user-synced staging snapshot on each (re)spawn; return the child argv. */
-async function argvFactory() {
-  const rdy = profileReady(STAGING_DIR);
-  if (!rdy.ok) throw new NeedsSyncError(STAGING_DIR, rdy.reason); // prompt the user to sync
-  const {cloneDir} = cloneProfile({mainDir: STAGING_DIR, cloneBase: CLONE_BASE});
-  currentClone = cloneDir;
-  if (RAW_CHILD_ARGS) return [MCP_BIN, `--clone=${cloneDir}`];
-  const args = buildMcpArgs({cloneDir});
-  assertSafeArgs(args);
-  return [MCP_BIN, ...args];
+function loginCmd() {
+  fs.mkdirSync(PROFILE_DIR, {recursive: true});
+  const url = process.argv[3] || 'https://www.google.com/';
+  log('打开一个【可见】Chrome（专属 profile），在里面登录你要用的站点，然后关掉窗口即可。');
+  log(`profile: ${PROFILE_DIR}`);
+  const c = spawn(CHROME, [`--user-data-dir=${PROFILE_DIR}`, '--no-first-run', '--no-default-browser-check', url], {stdio: 'ignore', detached: true});
+  c.unref();
+  log('登完关窗口；之后 `cdp-mcp-bg` 会无头复用这个登录（session/SSO 靠 --restore-last-session 保活）。');
 }
 
-const sup = new ChildSupervisor(MCP_CMD, argvFactory);
-sup.onNotification = m => writeUp(m); // forward server→client notifications upstream (S-notif)
-let starting = null;
-async function ensureStarted() {
-  if (sup.started()) return;
-  if (!starting) starting = sup.start().finally(() => { starting = null; });
-  await starting;
+function clearCmd() {
+  log('cleared agent profile:', clearProfile(PROFILE_DIR));
 }
-// placeholder-D
+// placeholder-E
 
-function teardown() {
-  // idle: stop the browser (release memory) + purge the clone (release disk). §4.2/§4.7
-  try { sup.stop(); } catch { /* ignore */ }
-  try { purgeClones({cloneBase: CLONE_BASE, includeOwn: true}); } catch (e) { log('purge', e.message); }
-  currentClone = null;
-  log('idle teardown: browser stopped, clone purged');
+function argvFactory() {
+  if (RAW_CHILD_ARGS) return [MCP_BIN, `--udd=${PROFILE_DIR}`];
+  const a = buildMcpArgs({userDataDir: PROFILE_DIR});
+  assertSafeArgs(a);
+  return [MCP_BIN, ...a];
 }
-const idle = new IdleTimer(IDLE_MS, teardown);
 
-readline.createInterface({input: process.stdin}).on('line', async line => {
-  if (!line.trim()) return;
-  idle.touch();
-  let msg; try { msg = JSON.parse(line); } catch { return; }
-  try {
-    if (msg.method === 'initialize') {
-      sup.setInitializeParams(msg.params); // replayed to each (re)spawned child, internally
+function proxyMain() {
+  const sup = new ChildSupervisor(MCP_CMD, argvFactory);
+  sup.onNotification = m => writeUp(m); // forward server→client notifications
+  let starting = null;
+  const ensureStarted = async () => {
+    if (sup.started()) return;
+    if (!starting) starting = sup.start().finally(() => { starting = null; });
+    await starting;
+  };
+  const idle = new IdleTimer(IDLE_MS, () => {
+    try { sup.stop(); } catch { /* ignore */ } // close browser → free memory/cpu (profile persists)
+    log('idle: browser stopped (freed memory/cpu); profile kept');
+  });
+  const needLogin = id => writeUp({jsonrpc: '2.0', id, error: {code: -32002, message:
+    `No agent profile yet. Run \`cdp-mcp-bg login\` once to log into ${PROFILE_DIR}, then retry.`}});
+
+  readline.createInterface({input: process.stdin}).on('line', async line => {
+    if (!line.trim()) return;
+    idle.touch();
+    let msg; try { msg = JSON.parse(line); } catch { return; }
+    try {
+      if (!profileExists(PROFILE_DIR)) { if (msg.id !== undefined) needLogin(msg.id); return; }
+      if (msg.method === 'initialize') {
+        sup.setInitializeParams(msg.params);
+        await ensureStarted();
+        if (msg.id !== undefined) writeUp({jsonrpc: '2.0', id: msg.id, result: sup.info});
+        return;
+      }
       await ensureStarted();
-      if (msg.id !== undefined) writeUp({jsonrpc: '2.0', id: msg.id, result: sup.info});
-      return;
+      if (msg.id === undefined) return; // notification upstream→server not forwarded
+      writeUp({jsonrpc: '2.0', id: msg.id, result: await sup.request(msg.method, msg.params || {})});
+    } catch (err) {
+      if (msg && msg.id !== undefined) writeUp({jsonrpc: '2.0', id: msg.id, error: {code: -32001, message: err.message}});
+      else log('error', err.message);
     }
-    await ensureStarted();
-    if (msg.id === undefined) return; // notification; not forwarded (documented limitation)
-    const result = await sup.request(msg.method, msg.params || {});
-    writeUp({jsonrpc: '2.0', id: msg.id, result});
-  } catch (err) {
-    if (msg && msg.id !== undefined) writeUp({jsonrpc: '2.0', id: msg.id, error: {code: -32001, message: err.message}});
-    else log('error', err.message);
-  }
-});
+  });
+  const shutdown = () => { idle.stop(); try { sup.stop(); } catch { /* ignore */ } process.exit(0); };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  log(`ready (profile ${PROFILE_DIR}, idle ${IDLE_MS}ms)`);
+}
 
-function shutdown() { idle.stop(); teardown(); process.exit(0); }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-process.on('exit', () => { try { purgeClones({cloneBase: CLONE_BASE, includeOwn: true}); } catch { /* ignore */ } });
-log('ready (idle', IDLE_MS + 'ms); waiting for agent on stdio');
+const sub = process.argv[2];
+if (sub === 'login') loginCmd();
+else if (sub === 'clear') clearCmd();
+else proxyMain();

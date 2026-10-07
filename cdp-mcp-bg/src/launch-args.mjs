@@ -1,28 +1,31 @@
 /**
- * Builds the chrome-devtools-mcp argv for a background, read-only, identity-safe session.
- * Zero changes to chrome-devtools-mcp — we only drive its existing CLI flags.
- * See design §4.4 (use-not-read), §4.7 (no logs/telemetry), §5 (flags), RK6 (restore-session).
+ * Builds the chrome-devtools-mcp argv for a background, read-only, identity-safe session
+ * on the agent's DEDICATED profile. Zero changes to chrome-devtools-mcp — we only drive
+ * its existing CLI flags. Bottom lines enforced here: never read personal info
+ * (use-not-read), bounded disk (cache cap).
  */
-export function buildMcpArgs({cloneDir, channel = 'stable', proxyServer, categoryExtensions = false} = {}) {
-  if (!cloneDir) throw new Error('cloneDir required');
+const DEFAULT_DISK_CACHE_BYTES = 256 * 1024 * 1024; // bound Chrome's on-disk cache (disk control)
+
+export function buildMcpArgs({userDataDir, channel = 'stable', proxyServer, categoryExtensions = false, diskCacheBytes = DEFAULT_DISK_CACHE_BYTES} = {}) {
+  if (!userDataDir) throw new Error('userDataDir required');
   const args = [
     '--headless',                       // true background, no window (R3)
-    `--user-data-dir=${cloneDir}`,      // the ephemeral clone (3rd profile mode, §3.2)
+    `--user-data-dir=${userDataDir}`,   // the agent's dedicated profile (not your real Chrome)
     `--channel=${channel}`,
     '--isolated=false',                 // we manage the dir; must not conflict with --user-data-dir
-    '--no-usage-statistics',            // identity not in telemetry (§4.7, L00B #2731)
-    '--no-javascript-evaluation',       // block document.cookie read path (§4.4)
+    '--no-usage-statistics',            // identity not in telemetry
+    '--no-javascript-evaluation',       // block document.cookie read path (use-not-read)
     '--no-category-network',            // drop get_network_request (Cookie/Set-Cookie headers)
-    '--chrome-arg=--restore-last-session',   // keep session cookies alive in the clone (RK6/A7)
+    '--chrome-arg=--restore-last-session',           // keep session/SSO logins alive headless
     '--chrome-arg=--hide-crash-restore-bubble',
+    `--chrome-arg=--disk-cache-size=${diskCacheBytes}`, // bounded disk cache (disk control)
   ];
   if (proxyServer) args.push(`--proxy-server=${proxyServer}`);
   if (categoryExtensions) args.push('--category-extensions');
-  // NOTE: deliberately NO --log-file (protocol traffic may carry cookies/credentials, §4.7).
+  // NOTE: deliberately NO --log-file (protocol traffic may carry cookies/credentials).
   return args;
 }
 
-// Flags that must never appear (identity leakage / window / wrong profile mode).
 export const FORBIDDEN_FLAGS = ['--log-file', '--make-default-browser'];
 
 export function assertSafeArgs(args) {
@@ -33,5 +36,6 @@ export function assertSafeArgs(args) {
   }
   if (!args.includes('--headless')) throw new Error('must be headless (background only)');
   if (!args.includes('--no-javascript-evaluation')) throw new Error('must block JS eval (use-not-read)');
+  if (!args.includes('--no-category-network')) throw new Error('must drop network tools (use-not-read)');
   return true;
 }
