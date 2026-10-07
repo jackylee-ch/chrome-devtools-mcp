@@ -1,0 +1,5 @@
+# cdp-mcp-bg has no npm deps (pure Node built-ins). Runtime artifacts live outside the
+# repo: profile clones in $TMPDIR, the staging snapshot in ~/.cdp-mcp-bg. Nothing to track.
+.DS_Store
+*.log
+node_modules/

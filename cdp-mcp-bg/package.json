@@ -1,0 +1,18 @@
+{
+  "name": "cdp-mcp-bg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Background headless Chrome + cloned-profile orchestrator (MCP proxy) around chrome-devtools-mcp. Zero changes to chrome-devtools-mcp.",
+  "bin": {
+    "cdp-mcp-bg": "./src/index.mjs"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=20000 test/unit.test.mjs test/proxy.test.mjs test/integration.test.mjs",
+    "sync": "node scripts/sync.mjs",
+    "spike:clone": "node test/spike-real-clone.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
