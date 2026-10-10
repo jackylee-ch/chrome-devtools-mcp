@@ -11,19 +11,20 @@ Chrome、不需要完全磁盘访问、不拷贝你的 profile**。
 
 ## 用法
 ```
-# 1) 一次性登录（弹出可见 Chrome，登你要用的站点，然后关窗口）：
-cdp-mcp-bg login              # 或 npm run login
-cdp-mcp-bg login https://你要先登的站点/
+# 1) 登录（弹出可见 Chrome，登你要用的站点，然后【关窗口】）：
+cdp-mcp-bg login                       # 默认打开 google
+cdp-mcp-bg login https://要登的站点/    # 直接开在那一页
 
 # 2) 作为 MCP 服务跑（agent 连它的 stdio）：
-cdp-mcp-bg                    # = node src/index.mjs
+cdp-mcp-bg                             # = node src/index.mjs
 #   可调：CDP_MCP_IDLE_MS（空闲回收，默认 5min）、CDP_PROFILE_DIR、CDP_MCP_BIN
 
 # 3) 清掉所有 agent 侧身份：
-cdp-mcp-bg clear             # 删除专属 profile（只动 agent 自己的数据）
+cdp-mcp-bg clear                       # 删除专属 profile（只动 agent 自己的数据）
 ```
-没登录就跑，代理会回 `No agent profile yet. Run \`cdp-mcp-bg login\`…` 的提示（不会去碰你的真实 profile）。
-session/SSO 登录靠 `--restore-last-session` 在无头下保活。
+**按需登录（推荐姿势）**：日常无需预登录——agent 撞到登录墙时，由它运行 `cdp-mcp-bg login <那一页>`，你在弹出的可见窗口里登录、**关窗**，agent 自动继续。
+协调细节：`login` 会先让后台无头浏览器**释放 profile**（二者不能同时占用，Chrome 单实例锁），登录期间代理对工具调用回 `login in progress` 提示；你关窗后代理透明重启、带上新登录。没登录就跑会回 `cdp-mcp-bg login` 提示，绝不碰你的真实 profile。session/SSO 靠 `--restore-last-session` 无头保活。
+> 注意：`login` 和 `cdp-mcp-bg` 服务要用**同一个 profile 目录**（默认都是 `~/.cdp-mcp-bg/agent-profile`；若自定义 `CDP_PROFILE_DIR` 两边都要设）。同一 profile 同时只有一个浏览器实例。
 
 ## 模块
 | 文件 | 职责 |

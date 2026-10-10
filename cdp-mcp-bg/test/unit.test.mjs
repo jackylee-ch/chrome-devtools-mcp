@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import {buildMcpArgs, assertSafeArgs} from '../src/launch-args.mjs';
 import {isLoginWall} from '../src/auth.mjs';
-import {profileExists, clearProfile} from '../src/profile.mjs';
+import {profileExists, clearProfile, loginActive, setLoginActive, clearLoginActive, profileInUse, releaseSingleton, singletonOwnerAlive, assertDedicated, realChromeProfileDir} from '../src/profile.mjs';
 
 test('buildMcpArgs: headless, identity-safe, bounded disk, no forbidden flags', () => {
   const args = buildMcpArgs({userDataDir: '/tmp/agent-profile'});
@@ -37,4 +37,43 @@ test('profileExists: false until initialized, true once Default/Local State pres
   assert.equal(profileExists(dir), true, 'Default present => initialized');
   clearProfile(dir);
   assert.equal(fs.existsSync(dir), false, 'clearProfile removed the agent profile');
+});
+
+test('login lock: set/active/clear, and self-heals a stale (dead-owner) lock', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentprof-'));
+  assert.equal(loginActive(dir), false);
+  setLoginActive(dir);
+  assert.equal(loginActive(dir), true, 'active while our pid owns it');
+  clearLoginActive(dir);
+  assert.equal(loginActive(dir), false);
+  // stale lock from a dead process → treated inactive and auto-removed
+  fs.writeFileSync(path.join(dir, '.cdp-login-active'), '2147480000');
+  assert.equal(loginActive(dir), false, 'dead-owner lock is stale');
+  assert.equal(fs.existsSync(path.join(dir, '.cdp-login-active')), false, 'stale lock cleared');
+});
+
+test('profileInUse / releaseSingleton reflect and clear the single-instance lock', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentprof-'));
+  assert.equal(profileInUse(dir), false);
+  fs.writeFileSync(path.join(dir, 'SingletonLock'), 'host-123');
+  assert.equal(profileInUse(dir), true);
+  releaseSingleton(dir);
+  assert.equal(profileInUse(dir), false, 'stale SingletonLock stripped');
+});
+
+test('singletonOwnerAlive: alive for live pid, false for dead/absent (so login never strips a live lock)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentprof-'));
+  assert.equal(singletonOwnerAlive(dir), false, 'no lock → not alive');
+  fs.symlinkSync(`host-${process.pid}`, path.join(dir, 'SingletonLock'));
+  assert.equal(singletonOwnerAlive(dir), true, 'live owner pid → alive');
+  fs.rmSync(path.join(dir, 'SingletonLock'));
+  fs.symlinkSync('host-2147480000', path.join(dir, 'SingletonLock'));
+  assert.equal(singletonOwnerAlive(dir), false, 'dead owner pid → stale (safe to strip)');
+});
+
+test('assertDedicated: refuses the real Chrome profile (and its parents), allows the dedicated dir', () => {
+  assert.throws(() => assertDedicated(realChromeProfileDir()), /real Chrome profile/);
+  assert.throws(() => assertDedicated(path.join(realChromeProfileDir(), 'Default')), /real Chrome profile/);
+  assert.throws(() => assertDedicated(path.dirname(realChromeProfileDir())), /real Chrome profile/); // parent
+  assert.doesNotThrow(() => assertDedicated(path.join(os.homedir(), '.cdp-mcp-bg', 'agent-profile')));
 });

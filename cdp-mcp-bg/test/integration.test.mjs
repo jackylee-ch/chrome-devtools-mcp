@@ -56,3 +56,24 @@ test('integration: no profile yet → prompt to run `cdp-mcp-bg login` (no real-
     try { proc.kill('SIGKILL'); } catch { /* ignore */ }
   }
 });
+
+test('integration: login in progress → proxy releases browser + rejects calls, resumes after', async () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentprof-'));
+  fs.mkdirSync(path.join(profile, 'Default'), {recursive: true});
+  const lock = path.join(profile, '.cdp-login-active');
+  const {proc, req} = startProxy({CDP_PROFILE_DIR: profile, CDP_MCP_IDLE_MS: '60000'});
+  try {
+    await req('initialize', {});
+    const pid1 = (await req('ping')).result.pid;              // browser up
+    fs.writeFileSync(lock, String(process.pid));               // simulate `login` claiming the profile
+    await sleep(900);                                          // guard (500ms) releases the browser
+    const during = await req('ping');
+    assert.ok(during.error && /login in progress/i.test(during.error.message), 'calls rejected during login');
+    fs.rmSync(lock, {force: true});                            // user closed the login window
+    const pid2 = (await req('ping')).result.pid;              // resumes transparently
+    assert.notEqual(pid2, pid1, 'browser respawned after login finished');
+  } finally {
+    try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+    fs.rmSync(profile, {recursive: true, force: true});
+  }
+});
