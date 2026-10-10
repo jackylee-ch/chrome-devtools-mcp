@@ -28,9 +28,18 @@ export class ChildSupervisor {
 
   async #spawn() {
     const args = typeof this.#argv === 'function' ? await this.#argv() : this.#argv;
-    this.#child = spawn(this.#cmd, args, {stdio: ['pipe', 'pipe', 'inherit']});
-    this.#rl = readline.createInterface({input: this.#child.stdout});
+    const c = spawn(this.#cmd, args, {stdio: ['pipe', 'pipe', 'inherit']});
+    this.#child = c;
+    this.#rl = readline.createInterface({input: c.stdout});
     this.#rl.on('line', l => this.#onLine(l));
+    // If the child dies (e.g. `cdp-mcp-bg login` kills it to grab the profile lock), reset
+    // so the next request transparently respawns on the (now logged-in) profile.
+    c.on('exit', () => {
+      if (this.#child !== c) return;
+      this.#child = null;
+      for (const [, p] of this.#pending) p({error: {message: 'child exited'}});
+      this.#pending.clear();
+    });
     // Handshake is INTERNAL — consumed here, never forwarded to the agent (so a re-spawn
     // after idle does not emit a spurious second initialize response upstream).
     this.info = await this.#send('initialize', this.initializeParams);

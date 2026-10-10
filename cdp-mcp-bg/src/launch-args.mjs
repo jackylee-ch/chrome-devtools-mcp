@@ -12,7 +12,6 @@ export function buildMcpArgs({userDataDir, channel = 'stable', proxyServer, cate
     '--headless',                       // true background, no window (R3)
     `--user-data-dir=${userDataDir}`,   // the agent's dedicated profile (not your real Chrome)
     `--channel=${channel}`,
-    '--isolated=false',                 // we manage the dir; must not conflict with --user-data-dir
     '--no-usage-statistics',            // identity not in telemetry
     '--no-javascript-evaluation',       // block document.cookie read path (use-not-read)
     '--no-category-network',            // drop get_network_request (Cookie/Set-Cookie headers)
@@ -20,6 +19,9 @@ export function buildMcpArgs({userDataDir, channel = 'stable', proxyServer, cate
     '--chrome-arg=--hide-crash-restore-bubble',
     `--chrome-arg=--disk-cache-size=${diskCacheBytes}`, // bounded disk cache (disk control)
   ];
+  // NOTE: do NOT pass --isolated — it conflicts with --user-data-dir in chrome-devtools-mcp
+  // (CONFLICTING_ARGS ['userDataDir','isolated']); with --user-data-dir set, isolated already
+  // defaults off, which is exactly what we want (reuse the dedicated dir, not a temp one).
   if (proxyServer) args.push(`--proxy-server=${proxyServer}`);
   if (categoryExtensions) args.push('--category-extensions');
   // NOTE: deliberately NO --log-file (protocol traffic may carry cookies/credentials).
