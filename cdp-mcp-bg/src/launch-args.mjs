@@ -18,6 +18,8 @@ export function buildMcpArgs({userDataDir, channel = 'stable', proxyServer, cate
     '--chrome-arg=--restore-last-session',           // keep session/SSO logins alive headless
     '--chrome-arg=--hide-crash-restore-bubble',
     `--chrome-arg=--disk-cache-size=${diskCacheBytes}`, // bounded disk cache (disk control)
+    '--chrome-arg=--use-mock-keychain',                 // macOS: 不碰登录钥匙串（chrome-launcher#189）——专属 profile 无需 OS 级密钥保护，避免「找不到 Chrome Safe Storage 钥匙串」的 prompt/报错
+    '--chrome-arg=--password-store=basic',              // 同上：强制 basic 密码库、绝不走 macOS Keychain（puppeteer / chrome-launcher 默认同款）
   ];
   // NOTE: do NOT pass --isolated — it conflicts with --user-data-dir in chrome-devtools-mcp
   // (CONFLICTING_ARGS ['userDataDir','isolated']); with --user-data-dir set, isolated already

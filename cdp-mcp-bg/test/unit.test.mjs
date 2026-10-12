@@ -17,6 +17,8 @@ test('buildMcpArgs: headless, identity-safe, bounded disk, no forbidden flags', 
   assert.ok(args.includes('--no-usage-statistics'));
   assert.ok(args.includes('--chrome-arg=--restore-last-session'));
   assert.ok(args.some(a => a.startsWith('--chrome-arg=--disk-cache-size=')), 'disk cache bounded');
+  assert.ok(args.includes('--chrome-arg=--use-mock-keychain'), 'macOS 钥匙串被绕开（chrome-launcher#189）');
+  assert.ok(args.includes('--chrome-arg=--password-store=basic'), 'basic 密码库，绝不走 macOS Keychain');
   assert.ok(!args.some(a => a.startsWith('--log-file')));
   assert.doesNotThrow(() => assertSafeArgs(args));
   assert.throws(() => assertSafeArgs([...args, '--log-file=/tmp/l']), /forbidden/);

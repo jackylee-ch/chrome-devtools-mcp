@@ -55,7 +55,7 @@ async function loginCmd() {
   log(`打开可见 Chrome 登录：${url}`);
   log('登完请【关闭窗口】——关窗后 agent 才会继续（会用上你的新登录）。');
   try {
-    const c = spawn(CHROME, [`--user-data-dir=${PROFILE_DIR}`, '--no-first-run', '--no-default-browser-check', url], {stdio: 'ignore'});
+    const c = spawn(CHROME, [`--user-data-dir=${PROFILE_DIR}`, '--use-mock-keychain', '--password-store=basic', '--no-first-run', '--no-default-browser-check', url], {stdio: 'ignore'});
     await new Promise(res => { c.on('exit', res); c.on('error', res); });
   } finally {
     clearLoginActive(PROFILE_DIR);
